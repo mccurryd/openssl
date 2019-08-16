@@ -13,7 +13,7 @@
 #include "ecjpake.h"
 
 /**
- * Generate part of he first round payload containing zero-knowledge
+ * Generate part of the first round payload containing zero-knowledge
  * proofs for two random numbers (x1 & x2).
  *
  *  step1 - The structure to populate with first round data.
