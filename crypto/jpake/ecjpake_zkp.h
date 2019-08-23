@@ -7,6 +7,11 @@
  * https://www.openssl.org/source/license.html
  */
 
+#ifndef __ecpake_zkp_h__
+#define __ecpake_zkp_h__ 1
+#include <sys/cdefs.h>
+__BEGIN_DECLS
+
 #import <openssl/ec.h>
 #import <openssl/evp.h>
 #import "ecjpake.h"
@@ -40,3 +45,5 @@ int ec_verify_zkp(const EC_GROUP *group,
                    BN_CTX *bnCtx,
                    const char *name);
 
+__END_DECLS
+#endif /* __ecpake_zkp_h__ */

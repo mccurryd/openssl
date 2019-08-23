@@ -9,8 +9,55 @@
 
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
+#include <string.h>
 #include "ecjpake.h"
-#include "string.h"
+
+/**
+ * Generate part of the first round payload containing zero-knowledge
+ * proofs for two random numbers (x1 & x2).
+ *
+ *  step1 - The structure to populate with first round data.
+ *    ctx - The context of this JPAKE exchange.
+ *  1 is returned for success, 0 on error.
+ */
+int EC_JPAKE_STEP1_generate_proofs(EC_JPAKE_STEP1 *step1, EC_JPAKE_CTX *ctx, const EVP_MD *digestMethod) 
+{
+
+    /* Error code for this step -- assume failure */
+    EC_JPAKE_RET returnCode = JPAKE_RET_FAILURE;
+
+    /* Get the generator point of the curve group */
+    const EC_POINT *G = EC_GROUP_get0_generator(ctx->group);
+
+    /* Get the order of the group 'N' */
+    BIGNUM *n = BN_new();
+    if(n == NULL ||
+      !EC_GROUP_get_order(ctx->group, n, ctx->bnCtx)) {
+        goto err;
+    }
+
+    /* Assume that x1 & x2 are filled in. */
+
+    /* Calculate the G*x1 and G*x2 */
+    if(!EC_POINT_mul(ctx->group, ctx->gx1, NULL, G, ctx->x1, ctx->bnCtx) ||
+       !EC_POINT_mul(ctx->group, ctx->gx2, NULL, G, ctx->x2, ctx->bnCtx)) {
+        goto err;
+    }
+
+    /* Calculate the zero-knowledge proofs */
+    if(!ec_generate_zkp(&step1->p1, ctx->group, G, ctx->x1, ctx->gx1, n, digestMethod, ctx->bnCtx, ctx->name) ||
+       !ec_generate_zkp(&step1->p2, ctx->group, G, ctx->x2, ctx->gx2, n, digestMethod, ctx->bnCtx, ctx->name)) {
+        goto err;
+    }
+    
+    /* Success */
+    returnCode = JPAKE_RET_SUCCESS;
+
+    /* Free resources */
+err:
+    BN_clear_free(n);
+    return returnCode;
+}
 
 /**
  * Generate the first round payload containing two random points
@@ -25,9 +72,6 @@ int EC_JPAKE_STEP1_generate(EC_JPAKE_STEP1 *step1, EC_JPAKE_CTX *ctx, const EVP_
 
     /* Error code for this step -- assume failure */
     EC_JPAKE_RET returnCode = JPAKE_RET_FAILURE;
-
-    /* Get the generator point of the curve group */
-    const EC_POINT *G = EC_GROUP_get0_generator(ctx->group);
 
     /* Get the order of the group 'N' */
     BIGNUM *n = BN_new();
@@ -44,18 +88,16 @@ int EC_JPAKE_STEP1_generate(EC_JPAKE_STEP1 *step1, EC_JPAKE_CTX *ctx, const EVP_
         goto err;
     }
 
-    /* Calculate the G*x1 and G*x2 */
-    if(!EC_POINT_mul(ctx->group, ctx->gx1, NULL, G, ctx->x1, ctx->bnCtx) ||
-       !EC_POINT_mul(ctx->group, ctx->gx2, NULL, G, ctx->x2, ctx->bnCtx)) {
+    if (JPAKE_RET_SUCCESS != EC_JPAKE_STEP1_generate_proofs(step1, ctx, digestMethod)) {
         goto err;
     }
 
-    /* Calculate the zero-knowledge proofs */
-    if(!ec_generate_zkp(&step1->p1, ctx->group, G, ctx->x1, ctx->gx1, n, digestMethod, ctx->bnCtx, ctx->name) ||
-       !ec_generate_zkp(&step1->p2, ctx->group, G, ctx->x2, ctx->gx2, n, digestMethod, ctx->bnCtx, ctx->name)) {
+    /* Moved x2s generation here from STEP2_generate. */
+    /* Find x2s = x2 * secret % n */
+    if(!BN_mod_mul(ctx->x2s, ctx->x2, ctx->secret, n, ctx->bnCtx)) {
         goto err;
     }
-    
+
     /* Success */
     returnCode = JPAKE_RET_SUCCESS;
 
@@ -99,6 +141,43 @@ int validate_participants(EC_JPAKE_CTX *ctx, const char *peerId)
  *              received - The partner's (Bob's) first round payload data.
  *          digestMethod - The digest method used in the exchange.
  *  Non-zero indicates error, 0 returned on success
+ * This flavor does NOT validate the entire payload: it doesn't check proofs.
+ */
+int EC_JPAKE_STEP1_process_noproof(EC_JPAKE_CTX *ctx, const char *partnerParticipantId, const EC_JPAKE_STEP1 *received, const EVP_MD *digestMethod) 
+{
+
+    /* Error code for this step */
+    const EC_JPAKE_RET stepErrorCode = JPAKE_RET_FAILURE;
+
+    /* Save the partner Id */
+    ctx->peer_name = OPENSSL_strdup(partnerParticipantId);
+
+    /* Check that ids are different */
+    if (ctx->peer_name == NULL ||
+        !validate_participants(ctx, partnerParticipantId)) {
+        return stepErrorCode;
+    }
+
+    /* Save the the client's Gx3 and Gx4 from the server's Gx1 and Gx2 */
+    ctx->gx3 = EC_POINT_bn2point(ctx->group, received->p1.gx, ctx->gx3, ctx->bnCtx);
+    ctx->gx4 = EC_POINT_bn2point(ctx->group, received->p2.gx, ctx->gx4, ctx->bnCtx);
+
+    if(ctx->gx3 == NULL || ctx->gx4 == NULL) {
+        return stepErrorCode;
+    }
+
+    return JPAKE_RET_SUCCESS;
+}
+
+/**
+ * Validate a first round payload. This also populates the Client's x3 and x4 (which,
+ * if you noticed in the header comments, are the Server's x1 and x2).
+ *
+ *                   ctx - The context of this JPAKE exchange.
+ *  partnerParticipantId - The peer's id.
+ *              received - The partner's (Bob's) first round payload data.
+ *          digestMethod - The digest method used in the exchange.
+ *  Non-zero indicates error, 0 returned on success
  */
 int EC_JPAKE_STEP1_process(EC_JPAKE_CTX *ctx, const char *partnerParticipantId, const EC_JPAKE_STEP1 *received, const EVP_MD *digestMethod) 
 {
@@ -113,21 +192,7 @@ int EC_JPAKE_STEP1_process(EC_JPAKE_CTX *ctx, const char *partnerParticipantId, 
         return stepErrorCode;
     }
 
-    /* Save the partner Id */
-    ctx->peer_name = OPENSSL_strdup(partnerParticipantId);
-
-    /* Check that ids are different */
-    if (G == NULL ||
-        ctx->peer_name == NULL ||
-        !validate_participants(ctx, partnerParticipantId)) {
-        return stepErrorCode;
-    }
-
-    /* Save the the client's Gx3 and Gx4 from the server's Gx1 and Gx2 */
-    ctx->gx3 = EC_POINT_bn2point(ctx->group, received->p1.gx, ctx->gx3, ctx->bnCtx);
-    ctx->gx4 = EC_POINT_bn2point(ctx->group, received->p2.gx, ctx->gx4, ctx->bnCtx);
-
-    if(ctx->gx3 == NULL || ctx->gx4 == NULL) {
+    if (JPAKE_RET_SUCCESS != EC_JPAKE_STEP1_process_noproof(ctx, partnerParticipantId, received, digestMethod)) {
         return stepErrorCode;
     }
 
@@ -173,10 +238,7 @@ int EC_JPAKE_STEP2_generate(EC_JPAKE_STEP2 *step2, EC_JPAKE_CTX *ctx, const EVP_
         goto err;
     }
 
-    /* Find x2s = x2 * secret % n */
-    if(!BN_mod_mul(ctx->x2s, ctx->x2, ctx->secret, n, ctx->bnCtx)) {
-        goto err;
-    }
+    /* Move x2s generation to STEP1_generate. */
 
     /* Find the generator where G = Gx1 + Gx3 + Gx4 */
     if(!EC_POINT_add(ctx->group, GA, ctx->gx1, ctx->gx3, ctx->bnCtx) ||
@@ -202,6 +264,59 @@ err:
     EC_POINT_free(A);
     EC_POINT_free(GA);
     BN_clear_free(n);
+
+    return returnCode;
+}
+
+/**
+ * Validates the round two data created by our peer.
+ *
+ *                   ctx - The JPAKE context
+ *  partnerParticipantId - The peer's id (e.g 'server').
+ *              received - Our peer's round two data
+ * 1 is returned for success, 0 on error.
+ * This variant doesn't assume that a ZKP is present--just the 'b' value.
+ */
+int EC_JPAKE_STEP2_process_noproof(EC_JPAKE_CTX *ctx, const char *partnerParticipantId, const EC_JPAKE_STEP2 *received, const EVP_MD *digestMethod) 
+{
+    /* Error code for this step */
+    EC_JPAKE_RET returnCode = JPAKE_RET_FAILURE;
+
+    /* Check that ids are different */
+    if (!validate_participants(ctx, partnerParticipantId)) {
+        return returnCode;
+    }
+
+    /* Calculate the generator Gb which should be the same as     */
+    /* the generator found in the peer's round two generate step. */
+    EC_POINT *GA = EC_POINT_new(ctx->group);
+    EC_POINT *Gx = EC_POINT_new(ctx->group);
+
+    if(GA == NULL ||
+       Gx == NULL ||
+      !EC_POINT_add(ctx->group, GA, ctx->gx1, ctx->gx2, ctx->bnCtx) ||
+      !EC_POINT_add(ctx->group, GA, GA, ctx->gx3, ctx->bnCtx)) {
+          goto err;
+      }
+
+    /* Build the point (public key) given in the peer's round 2 payload data */
+    Gx = EC_POINT_bn2point(ctx->group, received->gx, Gx, ctx->bnCtx);
+
+    /* Save the partner's A as our B */
+    EC_POINT_clear_free(ctx->b); ctx->b = NULL;
+    ctx->b = EC_POINT_dup(Gx, ctx->group);
+
+    if(Gx == NULL || ctx->b == NULL) {
+        goto err;
+    }
+
+    /* Success */
+    returnCode = JPAKE_RET_SUCCESS;
+
+    /* Free resources */
+err:
+    EC_POINT_free(GA);
+    EC_POINT_free(Gx);
 
     return returnCode;
 }
@@ -240,6 +355,7 @@ int EC_JPAKE_STEP2_process(EC_JPAKE_CTX *ctx, const char *partnerParticipantId, 
     Gx = EC_POINT_bn2point(ctx->group, received->gx, Gx, ctx->bnCtx);
 
     /* Save the partner's A as our B */
+    EC_POINT_clear_free(ctx->b); ctx->b = NULL;
     ctx->b = EC_POINT_dup(Gx, ctx->group);
 
     if(Gx == NULL || ctx->b == NULL) {
@@ -321,6 +437,8 @@ const BIGNUM *EC_JPAKE_get_shared_key(EC_JPAKE_CTX *ctx, const EVP_MD *hashMetho
     if(md == NULL || xBytes == NULL) {
         goto charErr;
     }
+    memset(md, 0, EVP_MD_size(hashMethod));
+    memset(xBytes, 0, BN_num_bytes(x));
 
     /* Create a digest context and hash the bytes */
     int xLen = BN_bn2bin(x, xBytes);
@@ -369,6 +487,7 @@ unsigned char *calculate_mac_key(const BIGNUM *keyingMaterial, const EVP_MD *met
     if(keyBytes == NULL) {
         return NULL;
     }
+    memset(keyBytes, 0, BN_num_bytes(keyingMaterial));
 
     int len = BN_bn2bin(keyingMaterial, keyBytes);
 
@@ -421,14 +540,14 @@ BIGNUM *calculate_mac_tag(const char *participantId,
         BN_CTX *bnCtx) 
 {
     /* Return value */
-    BIGNUM *bnHmac = BN_new();
+    BIGNUM *bnHmac = NULL; // BN_new();
 
     // Initialize the Hash Message Authentication Code (HMAC) Context with our shared secret and a SHA-256 digest
     HMAC_CTX *hmacCtx = HMAC_CTX_new();
     unsigned char *macKey = calculate_mac_key(keyingMaterial, digestMethod);
     unsigned char *hmac_value = OPENSSL_malloc(EVP_MD_size(digestMethod));
 
-    if(bnHmac == NULL || 
+    if(/*bnHmac == NULL || */
       hmacCtx == NULL || 
        macKey == NULL ||
    hmac_value == NULL ||
@@ -463,9 +582,14 @@ BIGNUM *calculate_mac_tag(const char *participantId,
     unsigned char *charGx3 = OPENSSL_malloc(BN_num_bytes(bnGx3));
     unsigned char *charGx4 = OPENSSL_malloc(BN_num_bytes(bnGx4));
 
-   if(charGx1 == NULL || charGx2 == NULL || charGx3 == NULL || charGx4 == NULL) {
+    if(charGx1 == NULL || charGx2 == NULL || charGx3 == NULL || charGx4 == NULL) {
         goto mallocErr;
     }
+    memset(charGx1, 0, BN_num_bytes(bnGx1));
+    memset(charGx2, 0, BN_num_bytes(bnGx2));
+    memset(charGx3, 0, BN_num_bytes(bnGx3));
+    memset(charGx4, 0, BN_num_bytes(bnGx4));
+
 
     /* This writes the BIGNUM bytes to the character arrays we created and returns the length */
     int Gx1Len = BN_bn2bin(bnGx1, charGx1);
@@ -526,6 +650,7 @@ int EC_JPAKE_STEP3_generate(EC_JPAKE_CTX *ctx, EC_JPAKE_STEP3 *send, const BIGNU
         return JPAKE_RET_FAILURE;
     }
 
+    OPENSSL_free(send->hmac); send->hmac = NULL;
     send->hmac = calculate_mac_tag(ctx->name, ctx->peer_name, ctx->gx1, ctx->gx2,
             ctx->gx3, ctx->gx4, key, send->method, ctx->group, ctx->bnCtx);
 
@@ -560,9 +685,10 @@ int EC_JPAKE_STEP3_process(EC_JPAKE_CTX *ctx, const char *partnerParticipantId, 
             ctx->gx1, ctx->gx2, key, received->method, ctx->group, ctx->bnCtx);
     int cmp = BN_cmp(received->hmac, partnerMac);
 
+    (void)BN_clear_free(partnerMac);
+
     /* 0 = success; all non-zero values will be true (error) */
     return (cmp == 0) ? JPAKE_RET_SUCCESS : JPAKE_RET_FAILURE;
 }
-
 
 

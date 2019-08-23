@@ -7,6 +7,11 @@
  * https://www.openssl.org/source/license.html
  */
 
+#ifndef __ecpake_struct_h__
+#define __ecpake_struct_h__ 1
+#include <sys/cdefs.h>
+__BEGIN_DECLS
+
 #include <openssl/ec.h>
 #include <openssl/evp.h>
 
@@ -145,3 +150,6 @@ int EC_JPAKE_ZKP_init(EC_JPAKE_ZKP *zkp);
  *  Rekeases a zero knowledge proof
  */
 void EC_JPAKE_ZKP_release(EC_JPAKE_ZKP *zkp);
+
+__END_DECLS
+#endif /* __ecpake_struct_h__ */

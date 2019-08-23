@@ -7,8 +7,22 @@
  * https://www.openssl.org/source/license.html
  */
 
+#ifndef __ecpake_h__
+#define __ecpake_h__ 1
+#include <sys/cdefs.h>
+__BEGIN_DECLS
+
 #include <openssl/hmac.h>
 #include <openssl/ec.h>
+#include <openssl/ossl_typ.h>
+
+#undef NDEBUG
+
+#include <openssl/opensslv.h>
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
+#include <openssl/libcrypto-compat.h>
+#endif
+
 #include "ecjpake_struct.h"
 #include "ecjpake_zkp.h"
 
@@ -29,6 +43,18 @@
 int EC_JPAKE_STEP1_generate(EC_JPAKE_STEP1 *step1, EC_JPAKE_CTX *ctx, const EVP_MD *digestMethod);
 
 /**
+ * Generate the first round payload if points have already been chosen
+ * (x1, x2), generating zero-knowledge proofs for both.
+ */
+int EC_JPAKE_STEP1_generate_proofs(EC_JPAKE_STEP1 *step1, EC_JPAKE_CTX *ctx, const EVP_MD *digestMethod);
+
+/**
+ * Validate a peer's (Bob's) first round payload. This populates the client's (Alice's) x3 and x4.
+ * This flavor does NOT check the ZKPs.
+ */
+int EC_JPAKE_STEP1_process_noproof(EC_JPAKE_CTX *ctx, const char *partnerParticipantId, const EC_JPAKE_STEP1 *received, const EVP_MD *digestMethod);
+
+/**
  * Validate a peer's (Bob's) first round payload. This populates the client's (Alice's) x3 and x4.
  */
 int EC_JPAKE_STEP1_process(EC_JPAKE_CTX *ctx, const char *partnerParticipantId, const EC_JPAKE_STEP1 *received, const EVP_MD *digestMethod);
@@ -37,6 +63,11 @@ int EC_JPAKE_STEP1_process(EC_JPAKE_CTX *ctx, const char *partnerParticipantId, 
  * Generate the second round payload for a participant.
  */
 int EC_JPAKE_STEP2_generate(EC_JPAKE_STEP2 *step2, EC_JPAKE_CTX *ctx, const EVP_MD *digestMethod);
+
+/**
+ * Validates the round two data created by our peer, without testing the proofs.
+ */
+int EC_JPAKE_STEP2_process_noproof(EC_JPAKE_CTX *ctx, const char *partnerParticipantId, const EC_JPAKE_STEP2 *received, const EVP_MD *digestMethod);
 
 /**
  * Validates the round two data created by our peer.
@@ -60,3 +91,6 @@ int EC_JPAKE_STEP3_generate(EC_JPAKE_CTX *ctx, EC_JPAKE_STEP3 *send, const BIGNU
  * would have used when the partner called calculateMacTag.
  */
 int EC_JPAKE_STEP3_process(EC_JPAKE_CTX *ctx, const char *partnerParticipantId, EC_JPAKE_STEP3 *received, const BIGNUM *key);
+
+__END_DECLS
+#endif /* __ecpake_h__ */

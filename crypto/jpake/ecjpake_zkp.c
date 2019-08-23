@@ -7,8 +7,8 @@
  * https://www.openssl.org/source/license.html
  */
 
-#import "ecjpake_zkp.h"
-#import "string.h"
+#include "ecjpake_zkp.h"
+#include <string.h>
 
 /**
  * Find a random BIGNUM given an order of an EC Curve.
@@ -88,6 +88,10 @@ BIGNUM *get_hash(const char *userId,
     if(gBn == NULL || gvBn == NULL || gxBn == NULL) {
         goto mallocErr;
     }
+
+    memset(gBytes, 0, BN_bn2mpi(gBn, NULL));
+    memset(gvBytes, 0, BN_bn2mpi(gvBn, NULL));
+    memset(gxBytes, 0, BN_bn2mpi(gxBn, NULL));
 
     int gLength = BN_bn2mpi(gBn, gBytes);
     int gvLength = BN_bn2mpi(gvBn, gvBytes);

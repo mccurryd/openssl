@@ -7,7 +7,9 @@
  * https://www.openssl.org/source/license.html
  */
 
+#include "ecjpake.h"
 #include "ecjpake_struct.h"
+#include <string.h>
 
 /**
  * Initialize the context for a JPAKE session with elliptic curves.
@@ -21,6 +23,8 @@ static int EC_JPAKE_CTX_init(EC_JPAKE_CTX *ctx,
     if (ctx == NULL) {
         return 1;
     }
+
+    memset(ctx, 0, sizeof(*ctx));
 
     if((ctx->name = OPENSSL_strdup(name)) == NULL ||
      (ctx->secret = BN_dup(secret)) == NULL ||
@@ -79,6 +83,7 @@ void EC_JPAKE_CTX_free(EC_JPAKE_CTX *ctx)
     EC_POINT_free(ctx->gx3);
     EC_POINT_free(ctx->gx4);
     BN_CTX_free(ctx->bnCtx);
+    OPENSSL_free(ctx);
 }
 
 /**
@@ -94,8 +99,10 @@ EC_JPAKE_CTX *EC_JPAKE_CTX_new(const char *name,
     if (ctx == NULL) {
         return NULL;
     }
+    memset(ctx, 0, sizeof(*ctx));
 
-    if(EC_JPAKE_CTX_init(ctx, name, curve_name, secret) == 1) {
+    if (EC_JPAKE_CTX_init(ctx, name, curve_name, secret) == 1) {
+        EC_JPAKE_CTX_free(ctx);
         return NULL;
     }
 
@@ -109,7 +116,8 @@ int EC_JPAKE_STEP_PART_init(EC_JPAKE_STEP_PART *p)
 {
     p->gx = BN_new();
     if(p->gx == NULL ||
-    !EC_JPAKE_ZKP_init(&p->zkpx)) {
+       !EC_JPAKE_ZKP_init(&p->zkpx)) {
+        BN_free(p->gx); p->gx = NULL;
         return 0;
     }
     return 1;
@@ -121,7 +129,7 @@ int EC_JPAKE_STEP_PART_init(EC_JPAKE_STEP_PART *p)
 void EC_JPAKE_STEP_PART_release(EC_JPAKE_STEP_PART *p)
 {
     EC_JPAKE_ZKP_release(&p->zkpx);
-    BN_free(p->gx);
+    BN_free(p->gx); p->gx = NULL;
 }
 
 /**
@@ -130,7 +138,7 @@ void EC_JPAKE_STEP_PART_release(EC_JPAKE_STEP_PART *p)
 int EC_JPAKE_STEP1_init(EC_JPAKE_STEP1 *s1)
 {
     if(!EC_JPAKE_STEP_PART_init(&s1->p1) ||
-    !EC_JPAKE_STEP_PART_init(&s1->p2)) {
+       !EC_JPAKE_STEP_PART_init(&s1->p2)) {
         return 0;
     }
     return 1;
@@ -154,8 +162,11 @@ int EC_JPAKE_STEP3_init(EC_JPAKE_STEP3 *s3, const EVP_MD *method)
     s3->hmac = OPENSSL_malloc(EVP_MD_size(method));
 
     if(s3->method == NULL || s3->hmac == NULL) {
+        OPENSSL_free(s3->hmac); s3->hmac = NULL;
+        s3->method = NULL;
         return 0;
     }
+    memset(s3->hmac, 0, sizeof(*s3->hmac));
     return 1;
 }
 
@@ -164,7 +175,7 @@ int EC_JPAKE_STEP3_init(EC_JPAKE_STEP3 *s3, const EVP_MD *method)
  */
 void EC_JPAKE_STEP3_release(EC_JPAKE_STEP3 *s3) 
 {
-    BN_clear_free(s3->hmac);
+    BN_clear_free(s3->hmac); s3->hmac = NULL;
     s3->method = NULL;
 }
 
@@ -177,17 +188,17 @@ int EC_JPAKE_ZKP_init(EC_JPAKE_ZKP *zkp) {
     zkp->b = BN_new();
     
     if(zkp->gr == NULL || zkp->b == NULL) {
+        BN_free(zkp->gr); zkp->gr = NULL;
+        BN_free(zkp->b); zkp->b = NULL;
         return 0;
     }
     return 1;
 }
 
 /**
- *  Rekeases a zero knowledge proof
+ *  Releases a zero knowledge proof
  */
 void EC_JPAKE_ZKP_release(EC_JPAKE_ZKP *zkp) {
-    BN_clear_free(zkp->gr);
-    BN_clear_free(zkp->b);
+    BN_clear_free(zkp->gr); zkp->gr = NULL;
+    BN_clear_free(zkp->b); zkp->b = NULL;
 }
-
-
